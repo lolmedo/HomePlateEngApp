@@ -1,7 +1,10 @@
 package edu.stanford.homeplateengapp
 
+import kotlin.UByte
+import kotlinx.coroutines.delay
 import android.nfc.NfcAdapter
 import android.nfc.Tag
+import android.nfc.tech.NfcV
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -15,6 +18,10 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import edu.stanford.homeplateengapp.nfc.NfcTagReader
+import edu.stanford.homeplateengapp.nfc.NfcVHandler
+import edu.stanford.homeplateengapp.hardware.Max20362
+import edu.stanford.homeplateengapp.hardware.sensors.Max30210
+import edu.stanford.homeplateengapp.hardware.spi.SC18IS606Driver
 import edu.stanford.homeplateengapp.ui.theme.HomePlateEngAppTheme
 
 class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
@@ -72,5 +79,65 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     override fun onTagDiscovered(tag: Tag) {
         Log.d("NFC_DISCOVERY", "onTagDiscovered called on thread: ${Thread.currentThread().name}")
         NfcTagReader.readTag(tag)
+
+        // Initialize hardware
+        Log.i("MainActivity", "Initializing Homeplate...")
+        val nfcHandler = NfcVHandler(tag)
+        val pmic = Max20362(nfcHandler)
+        val bridge = SC18IS606Driver(nfcHandler)
+        val tempSensor = Max30210(nfcHandler)
+
+        // Enable Vout to 3.3V
+        nfcHandler.voltageHighEnable(false)
+        Log.i("MainActivity", "Enabled Vout to 1.8V")
+
+        // Delay and initialize MAX20362
+        Thread.sleep(1000)
+
+        // Read MAX20362 chip_id
+//        pmic.readChipId()
+
+        // Scratchwork
+//        Log.d("MainActivity", "Unlocking?")
+//        pmic.readRegister(0x50u.toUByte())
+//        pmic.writeRegister(0x50u.toUByte(), 0x00u)
+//        pmic.readRegister(0x50u.toUByte())
+//        pmic.readRegister(0x51u.toUByte())
+//        pmic.writeRegister(0x51u, 0x55u)
+
+        // Configure BBst
+//        Log.d("MainActivity", "Probing BBst")
+//        pmic.readRegister(registerAddress = 0x0Cu)
+//        pmic.readRegister(Max20362.Registers.BBstCfg0)
+//        pmic.writeRegister(Max20362.Registers.BBstCfg0, 0x63u)
+//        pmic.readRegister(Max20362.Registers.BBstCfg0)
+//        pmic.readRegister(Max20362.Registers.BBstVSet)
+//        pmic.readRegister(0x0Au)
+
+        Log.d("MainActivity", "Probing LDO")
+        Log.d("MainActivity", "Reading LDO Status ...")
+        pmic.readLDOStatus()
+        pmic.readLDOVSet()
+        Log.d("MainActivity", "Setting LDO to 1.8V ...")
+        pmic.writeRegister(Max20362.Registers.LDOVSet, 0x09u)
+//        pmic.writeRegister(Max20362.Registers.LDOVSet, 0x04u)
+        Log.d("MainActivity", "Reading LDO Status ...")
+        pmic.readLDOStatus()
+        pmic.readLDOVSet()
+        Log.d("MainActivity", "Enabling LDO ...")
+        pmic.enableLDO()
+        Log.d("MainActivity", "Reading LDO Status ...")
+        pmic.readLDOStatus()
+
+        // Initialize SPI Bridge
+        bridge.initialize()
+
+        // Initialize temperature sensor
+//        tempSensor.initialize()
     }
 }
+
+fun UByteArray.UBytetoHexString(): String =
+    this.joinToString(" ") { byte ->
+        byte.toString(16).uppercase().padStart(2, '0')
+    }
