@@ -88,11 +88,11 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         val tempSensor = Max30210(nfcHandler)
 
         // Enable Vout to 3.3V
-        nfcHandler.voltageHighEnable(false)
-        Log.i("MainActivity", "Enabled Vout to 1.8V")
+        nfcHandler.voltageHighEnable(true)
+        Log.i("MainActivity", "Enabled Vout to 3.3V")
 
         // Delay and initialize MAX20362
-        Thread.sleep(1000)
+//        Thread.sleep(1000)
 
         // Read MAX20362 chip_id
 //        pmic.readChipId()
@@ -132,8 +132,27 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         // Initialize SPI Bridge
         bridge.initialize()
 
+        // Communicate with AFE
+        bridge.configureSpi(
+            mode = SC18IS606Driver.SpiMode.MODE0,
+            clock = SC18IS606Driver.SpiClock.KHZ_58,
+            bitOrder = SC18IS606Driver.BitOrder.MSB_FIRST
+        )
+        val register = 0x01FFu
+        val txData = ubyteArrayOf(
+            ((register.toUInt() shr 8) and 0xFFu).toUByte(),
+            (register.toUInt() and 0xFFu).toUByte(),
+            0x80u, // Read command
+            0x00u  // Dummy byte; clocks out register value
+        )
+
+        val rxData = bridge.transfer(
+            chipSelect = 0,
+            txData = txData
+        )
+
         // Initialize temperature sensor
-//        tempSensor.initialize()
+        tempSensor.initialize()
     }
 }
 

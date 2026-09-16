@@ -36,8 +36,8 @@ class NfcVHandler(private val tag: Tag) {
             0x02u.toUByte(),        // Request Flags = High Data Rate ON
             0xA9u.toUByte(),        // Command: Peripheral Transaction (PTRA)
             0x2Bu.toUByte(),        // Manufacturer Code
-//            0x42u.toUByte(),        // Control Write
-            0x40u.toUByte(),         // Configuration Write
+            0x42u.toUByte(),        // Control Write
+//            0x40u.toUByte(),         // Configuration Write
             parByte,                // Parameter byte.
             // Table 2.
         )
