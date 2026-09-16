@@ -131,20 +131,18 @@ class SC18IS606Driver(
     }
 
     /**
-     * Full-duplex SPI transaction.
+     * Starts an SPI transaction and leaves the captured MISO data in the
+     * SC18IS606 internal buffer.
      *
      * chipSelect is an index:
      *   0 -> SS0 (Function ID 01h)
      *   1 -> SS1 (Function ID 02h)
      *   2 -> SS2 (Function ID 04h)
-     *
-     * The SC18IS606 stores one MISO byte for every MOSI byte sent. Reading the
-     * data buffer therefore returns txData.size bytes.
      */
-    override fun transfer(
+    fun writeSpiTransaction(
         chipSelect: Int,
         txData: UByteArray,
-    ): UByteArray {
+    ) {
         require(chipSelect in 0..2) {
             "SC18IS606 has three chip selects: SS0, SS1, SS2"
         }
@@ -161,8 +159,32 @@ class SC18IS606Driver(
             functionId = functionId,
             payload = txData,
         )
+    }
 
-        return readBuffer(txData.size)
+    /**
+     * Reads previously captured MISO bytes from the SC18IS606 internal buffer.
+     */
+    fun readSpiBuffer(length: Int): UByteArray {
+        return readBuffer(length)
+    }
+
+    /**
+     * Convenience full-duplex SPI transaction.
+     *
+     * Equivalent to:
+     *   writeSpiTransaction(chipSelect, txData)
+     *   readSpiBuffer(txData.size)
+     */
+    fun transfer(
+        chipSelect: Int,
+        txData: UByteArray,
+    ): UByteArray {
+        writeSpiTransaction(
+            chipSelect = chipSelect,
+            txData = txData,
+        )
+
+        return readSpiBuffer(txData.size)
     }
 
     /**
