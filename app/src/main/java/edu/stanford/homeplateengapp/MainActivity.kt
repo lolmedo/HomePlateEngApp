@@ -21,6 +21,7 @@ import edu.stanford.homeplateengapp.nfc.NfcTagReader
 import edu.stanford.homeplateengapp.nfc.NfcVHandler
 import edu.stanford.homeplateengapp.hardware.Max20362
 import edu.stanford.homeplateengapp.hardware.sensors.Max30210
+import edu.stanford.homeplateengapp.hardware.sensors.Max30003Driver
 import edu.stanford.homeplateengapp.hardware.spi.SC18IS606Driver
 import edu.stanford.homeplateengapp.ui.theme.HomePlateEngAppTheme
 
@@ -131,25 +132,38 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
         // Initialize SPI Bridge
         bridge.initialize()
-
-        // Communicate with AFE
         bridge.configureSpi(
             mode = SC18IS606Driver.SpiMode.MODE0,
             clock = SC18IS606Driver.SpiClock.KHZ_58,
             bitOrder = SC18IS606Driver.BitOrder.MSB_FIRST
         )
-        val register = 0x01FFu
-        val txData = ubyteArrayOf(
-            ((register.toUInt() shr 8) and 0xFFu).toUByte(),
-            (register.toUInt() and 0xFFu).toUByte(),
-            0x80u, // Read command
-            0x00u  // Dummy byte; clocks out register value
-        )
 
-        val rxData = bridge.transfer(
-            chipSelect = 0,
-            txData = txData
-        )
+        // Communicate with AFE
+        val spiTransport = Max30003Driver.SpiTransferTransport { chipSelect , txData ->
+            bridge.transfer(
+                chipSelect = chipSelect,
+                txData = txData,
+            )
+        }
+        val ecgSensor = Max30003Driver(spiTransport, chipSelect = 0)
+        // Perform a simple INFO read.
+        val info = ecgSensor.readInfo()
+
+        println("Raw INFO: 0x${info.raw.toString(16)}")
+        println("Revision ID: ${info.revisionId}")
+        println("Interface valid: ${info.interfacePatternValid}")
+//        val register = 0x01FFu
+//        val txData = ubyteArrayOf(
+//            ((register.toUInt() shr 8) and 0xFFu).toUByte(),
+//            (register.toUInt() and 0xFFu).toUByte(),
+//            0x80u, // Read command
+//            0x00u  // Dummy byte; clocks out register value
+//        )
+//
+//        val rxData = bridge.transfer(
+//            chipSelect = 0,
+//            txData = txData
+//        )
 
         // Initialize temperature sensor
         tempSensor.initialize()
