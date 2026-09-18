@@ -20,6 +20,7 @@ package edu.stanford.homeplateengapp.hardware.sensors
 class Max30003Driver(
     private val spi: SpiTransferTransport,
     private val chipSelect: Int = 0,
+    private val registerMap: RegisterMap = RegisterMap(),
 ) {
 
     /**
@@ -30,6 +31,43 @@ class Max30003Driver(
      */
     fun interface SpiTransferTransport {
         fun transfer(chipSelect: Int, txData: UByteArray): UByteArray
+    }
+
+    /**
+     * Physical byte addresses for one logical 24-bit MAX30003 register.
+     *
+     * Your custom device returns one byte per normal SPI transaction, so a logical
+     * 24-bit MAX30003 register is reconstructed from three byte reads.
+     */
+    data class RegisterByteAddresses(
+        val msb: UShort,
+        val mid: UShort,
+        val lsb: UShort,
+    )
+
+    /**
+     * Custom-chip register map.
+     *
+     * The default mapping is deliberately only a skeleton: each stock MAX30003
+     * logical register number receives three non-overlapping byte addresses using
+     * logicalAddress * 3. Override individual registers as you learn the real
+     * 16-bit addresses used by your custom implementation.
+     */
+    class RegisterMap(
+        private val overrides: Map<Register, RegisterByteAddresses> = emptyMap(),
+    ) {
+        fun addresses(register: Register): RegisterByteAddresses =
+            overrides[register] ?: defaultAddresses(register)
+
+        private fun defaultAddresses(register: Register): RegisterByteAddresses {
+            val base = register.address.toUInt() * 3u
+            require(base + 2u <= 0xFFFFu) { "Mapped register address exceeds 16 bits" }
+            return RegisterByteAddresses(
+                msb = base.toUShort(),
+                mid = (base + 1u).toUShort(),
+                lsb = (base + 2u).toUShort(),
+            )
+        }
     }
 
     enum class Register(val address: UShort) {
@@ -309,38 +347,59 @@ class Max30003Driver(
         return info
     }
 
-    /** Read any 24-bit register using a single 32-clock SPI transaction. */
-    fun readRegister(register: Register): Int = readRegister(register.address)
-
-    /** Read any 24-bit register by its 7-bit MAX30003 address. */
-    fun readRegister(address: Ushort): Int {
-        require(address.toInt() <= 0x7F) { "MAX30003 register address must fit in 7 bits" }
-
+    /**
+     * Read one physical 8-bit register from the custom device.
+     *
+     * Wire format:
+     *   [ADDR_MSB][ADDR_LSB][READ=0x80][DUMMY]
+     *
+     * The received register byte is expected in rx[3].
+     */
+    fun readByte(address: UShort): UByte {
+        val a = address.toUInt()
         val tx = ubyteArrayOf(
-            commandByte(address, read = true),
-            0x00u,
-            0x00u,
+            ((a shr 8) and 0xFFu).toUByte(),
+            (a and 0xFFu).toUByte(),
+            READ_COMMAND,
             0x00u,
         )
-        val rx = transferChecked(tx)
-        return bytesTo24(rx[1], rx[2], rx[3])
+        return transferChecked(tx)[3]
     }
 
-    /** Write a 24-bit register using a single 32-clock SPI transaction. */
-    fun writeRegister(register: Register, value: Int) = writeRegister(register.address, value)
-
-    /** Write a 24-bit register by its 7-bit MAX30003 address. */
-    fun writeRegister(address: UByte, value: Int) {
-        require(address.toInt() <= 0x7F) { "MAX30003 register address must fit in 7 bits" }
-        require(value in 0..MASK_24) { "MAX30003 register value must fit in 24 bits" }
-
+    /** Write one physical 8-bit register on the custom device. */
+    fun writeByte(address: UShort, value: UByte) {
+        val a = address.toUInt()
         val tx = ubyteArrayOf(
-            commandByte(address, read = false),
-            ((value ushr 16) and 0xFF).toUByte(),
-            ((value ushr 8) and 0xFF).toUByte(),
-            (value and 0xFF).toUByte(),
+            ((a shr 8) and 0xFFu).toUByte(),
+            (a and 0xFFu).toUByte(),
+            WRITE_COMMAND,
+            value,
         )
         transferChecked(tx)
+    }
+
+    /**
+     * Read one logical 24-bit MAX30003 register through three custom 8-bit reads.
+     * The physical byte addresses come from [registerMap].
+     */
+    fun readRegister(register: Register): Int {
+        val a = registerMap.addresses(register)
+        return bytesTo24(
+            readByte(a.msb),
+            readByte(a.mid),
+            readByte(a.lsb),
+        )
+    }
+
+    /**
+     * Write one logical 24-bit MAX30003 register through three custom 8-bit writes.
+     */
+    fun writeRegister(register: Register, value: Int) {
+        require(value in 0..MASK_24) { "MAX30003 logical register value must fit in 24 bits" }
+        val a = registerMap.addresses(register)
+        writeByte(a.msb, ((value ushr 16) and 0xFF).toUByte())
+        writeByte(a.mid, ((value ushr 8) and 0xFF).toUByte())
+        writeByte(a.lsb, (value and 0xFF).toUByte())
     }
 
     fun softwareReset() = writeRegister(Register.SW_RST, 0x000000)
@@ -400,15 +459,19 @@ class Max30003Driver(
         }
     }
 
-    /** Read one ECG FIFO word in normal mode. */
-    fun readEcgSample(): EcgSample = parseEcgWord(readRegister(Register.ECG_FIFO))
+    /**
+     * Read one ECG FIFO sample using the custom burst protocol.
+     *
+     * A custom FIFO sample is 4 bytes. For compatibility with the original
+     * MAX30003 parser, the lower 24 bits are interpreted as the stock FIFO word.
+     * Change [extractMax30003Word] if your custom 32-bit frame places those bits
+     * somewhere else.
+     */
+    fun readEcgSample(): EcgSample = readEcgFifoBurst(1).first()
 
     /**
-     * Read up to [maxSamples] using repeated normal-mode 32-clock transactions.
-     * Stops on EOF or EMPTY. Throws on FIFO overflow.
-     *
-     * This is the most conservative option for an NFC -> I2C -> SPI bridge because each
-     * sensor access remains exactly four SPI bytes.
+     * Read up to [maxSamples] using one-sample custom burst transactions.
+     * Stops on EOF or EMPTY and resets the FIFO on overflow.
      */
     fun drainEcgFifo(maxSamples: Int = 32): List<EcgSample> {
         require(maxSamples in 1..32) { "maxSamples must be in 1..32" }
@@ -432,22 +495,36 @@ class Max30003Driver(
     }
 
     /**
-     * Read [wordCount] ECG FIFO words in one MAX30003 burst-mode SPI frame.
+     * Read [wordCount] FIFO samples in one custom burst frame.
      *
-     * Use this only if the SC18IS606 transport preserves CS for the entire byte array.
-     * The frame length is 1 command byte + 3 bytes per FIFO word.
+     * TX/RX frame shape:
+     *   [ADDR_MSB][ADDR_LSB][READ] + 4 clocks per requested sample
+     *
+     * Chip select must remain asserted for the entire frame.
      */
     fun readEcgFifoBurst(wordCount: Int): List<EcgSample> {
         require(wordCount in 1..32) { "wordCount must be in 1..32" }
 
-        val tx = UByteArray(1 + wordCount * 3)
-        tx[0] = commandByte(Register.ECG_FIFO_BURST.address, read = true)
-        val rx = transferChecked(tx)
+        val burstAddress = Register.ECG_FIFO_BURST.address.toUInt()
+        val headerSize = 3
+        val sampleSize = 4
+        val tx = UByteArray(headerSize + wordCount * sampleSize)
+        tx[0] = ((burstAddress shr 8) and 0xFFu).toUByte()
+        tx[1] = (burstAddress and 0xFFu).toUByte()
+        tx[2] = READ_COMMAND
 
+        val rx = transferChecked(tx)
         val result = ArrayList<EcgSample>(wordCount)
+
         for (index in 0 until wordCount) {
-            val base = 1 + index * 3
-            val sample = parseEcgWord(bytesTo24(rx[base], rx[base + 1], rx[base + 2]))
+            val base = headerSize + index * sampleSize
+            val rawFrame = bytesTo32(
+                rx[base],
+                rx[base + 1],
+                rx[base + 2],
+                rx[base + 3],
+            )
+            val sample = parseEcgWord(extractMax30003Word(rawFrame))
             when (sample.tag) {
                 EcgTag.OVERFLOW -> {
                     resetFifo()
@@ -462,6 +539,13 @@ class Max30003Driver(
         }
         return result
     }
+
+    /**
+     * Compatibility assumption for the custom 4-byte sample frame:
+     * stock MAX30003 FIFO bits occupy the lower 24 bits.
+     */
+    private fun extractMax30003Word(rawFrame: UInt): Int =
+        (rawFrame and 0x00FF_FFFFu).toInt()
 
     fun readRtor(masterClock: MasterClock): RtorMeasurement {
         val raw = readRegister(Register.RTOR)
@@ -519,9 +603,9 @@ class Max30003Driver(
 
     private fun buildEcgConfig(config: EcgConfig): Int {
         return (config.rate.bits shl 22) or
-            (config.gain.bits shl 16) or
-            (config.highPass.bit shl 14) or
-            (config.lowPass.bits shl 12)
+                (config.gain.bits shl 16) or
+                (config.highPass.bit shl 14) or
+                (config.lowPass.bits shl 12)
     }
 
     private fun buildEmuxConfig(config: EcgConfig): Int {
@@ -542,8 +626,8 @@ class Max30003Driver(
     private fun buildManagerInterrupt(config: EcgConfig): Int {
         val efit = config.fifoInterruptThreshold - 1
         return (efit shl 19) or
-            (RtorInterruptClear.ON_RTOR_READ.bits shl 4) or
-            (1 shl 2) // CLR_SAMP = self-clear
+                (RtorInterruptClear.ON_RTOR_READ.bits shl 4) or
+                (1 shl 2) // CLR_SAMP = self-clear
     }
 
     private fun buildInterruptEnable(config: EcgConfig): Int {
@@ -562,19 +646,21 @@ class Max30003Driver(
         return rx
     }
 
-    private fun commandByte(address: UByte, read: Boolean): UByte {
-        val a = address.toInt()
-        require(a in 0..0x7F)
-        return ((a shl 1) or if (read) 1 else 0).toUByte()
-    }
-
     private fun bytesTo24(msb: UByte, mid: UByte, lsb: UByte): Int =
         (msb.toInt() shl 16) or (mid.toInt() shl 8) or lsb.toInt()
+
+    private fun bytesTo32(b0: UByte, b1: UByte, b2: UByte, b3: UByte): UInt =
+        (b0.toUInt() shl 24) or
+                (b1.toUInt() shl 16) or
+                (b2.toUInt() shl 8) or
+                b3.toUInt()
 
     private fun Int.hasBit(bit: Int): Boolean = (this and (1 shl bit)) != 0
 
     companion object {
         private const val MASK_24 = 0x00FF_FFFF
         private const val DEFAULT_RTOR2 = (0x20 shl 16) or (0x2 shl 12) or (0x4 shl 8)
+        private val READ_COMMAND: UByte = 0x80u
+        private val WRITE_COMMAND: UByte = 0x00u
     }
 }
