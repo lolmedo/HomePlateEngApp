@@ -20,7 +20,6 @@ package edu.stanford.homeplateengapp.hardware.sensors
 class Max30003Driver(
     private val spi: SpiTransferTransport,
     private val chipSelect: Int = 0,
-    private val registerMap: RegisterMap = RegisterMap(),
 ) {
 
     /**
@@ -44,31 +43,6 @@ class Max30003Driver(
         val mid: UShort,
         val lsb: UShort,
     )
-
-    /**
-     * Custom-chip register map.
-     *
-     * The default mapping is deliberately only a skeleton: each stock MAX30003
-     * logical register number receives three non-overlapping byte addresses using
-     * logicalAddress * 3. Override individual registers as you learn the real
-     * 16-bit addresses used by your custom implementation.
-     */
-    class RegisterMap(
-        private val overrides: Map<Register, RegisterByteAddresses> = emptyMap(),
-    ) {
-        fun addresses(register: Register): RegisterByteAddresses =
-            overrides[register] ?: defaultAddresses(register)
-
-        private fun defaultAddresses(register: Register): RegisterByteAddresses {
-            val base = register.address.toUInt() * 3u
-            require(base + 2u <= 0xFFFFu) { "Mapped register address exceeds 16 bits" }
-            return RegisterByteAddresses(
-                msb = base.toUShort(),
-                mid = (base + 1u).toUShort(),
-                lsb = (base + 2u).toUShort(),
-            )
-        }
-    }
 
     enum class Register(val address: UShort) {
         NO_OP(0x00u),
@@ -201,8 +175,7 @@ class Max30003Driver(
     )
 
     data class DeviceInfo(
-        val raw: Int,
-        val revisionId: Int,
+        val raw: UByte,
         val interfacePatternValid: Boolean,
     )
 
@@ -326,14 +299,14 @@ class Max30003Driver(
         readRegister(Register.NO_OP)
         val info = readInfo()
 
-        writeRegister(Register.MNGR_INT, buildManagerInterrupt(config))
-        writeRegister(Register.EN_INT, buildInterruptEnable(config))
-        writeRegister(Register.EN_INT2, 0x000000) // Dedicated INT2B path disabled unless the upper layer configures it.
-        writeRegister(Register.CNFG_ECG, buildEcgConfig(config))
-        writeRegister(Register.CNFG_RTOR1, buildRtor1Config(config))
-        writeRegister(Register.CNFG_RTOR2, DEFAULT_RTOR2)
-        writeRegister(Register.CNFG_EMUX, buildEmuxConfig(config))
-        writeRegister(Register.CNFG_GEN, buildGeneralConfig(config))
+//        writeRegister(Register.MNGR_INT, buildManagerInterrupt(config))
+//        writeRegister(Register.EN_INT, buildInterruptEnable(config))
+//        writeRegister(Register.EN_INT2, 0x000000) // Dedicated INT2B path disabled unless the upper layer configures it.
+//        writeRegister(Register.CNFG_ECG, buildEcgConfig(config))
+//        writeRegister(Register.CNFG_RTOR1, buildRtor1Config(config))
+//        writeRegister(Register.CNFG_RTOR2, DEFAULT_RTOR2)
+//        writeRegister(Register.CNFG_EMUX, buildEmuxConfig(config))
+//        writeRegister(Register.CNFG_GEN, buildGeneralConfig(config))
 
         if (waitForPll) {
             waitForPllLock(
@@ -378,42 +351,27 @@ class Max30003Driver(
         transferChecked(tx)
     }
 
-    /**
-     * Read one logical 24-bit MAX30003 register through three custom 8-bit reads.
-     * The physical byte addresses come from [registerMap].
-     */
-    fun readRegister(register: Register): Int {
-        val a = registerMap.addresses(register)
-        return bytesTo24(
-            readByte(a.msb),
-            readByte(a.mid),
-            readByte(a.lsb),
-        )
+
+    fun readRegister(register: Register): UByte {
+        return readByte(register.address)
     }
 
-    /**
-     * Write one logical 24-bit MAX30003 register through three custom 8-bit writes.
-     */
-    fun writeRegister(register: Register, value: Int) {
-        require(value in 0..MASK_24) { "MAX30003 logical register value must fit in 24 bits" }
-        val a = registerMap.addresses(register)
-        writeByte(a.msb, ((value ushr 16) and 0xFF).toUByte())
-        writeByte(a.mid, ((value ushr 8) and 0xFF).toUByte())
-        writeByte(a.lsb, (value and 0xFF).toUByte())
+
+    fun writeRegister(register: Register, value: UByte) {
+        writeByte(register.address, value)
     }
 
-    fun softwareReset() = writeRegister(Register.SW_RST, 0x000000)
+    fun softwareReset() = writeRegister(Register.SW_RST, 0x00u)
 
-    fun synchronize() = writeRegister(Register.SYNCH, 0x000000)
+    fun synchronize() = writeRegister(Register.SYNCH, 0x00u)
 
-    fun resetFifo() = writeRegister(Register.FIFO_RST, 0x000000)
+    fun resetFifo() = writeRegister(Register.FIFO_RST, 0x00u)
 
     fun readInfo(): DeviceInfo {
         val raw = readRegister(Register.INFO)
         return DeviceInfo(
             raw = raw,
-            revisionId = (raw ushr 16) and 0x0F,
-            interfacePatternValid = ((raw ushr 20) and 0x0F) == 0b0101,
+            interfacePatternValid = raw == 0x4f.toUByte(),
         )
     }
 
@@ -421,24 +379,24 @@ class Max30003Driver(
      * Reading STATUS can clear latched status/interrupt terms according to the MAX30003
      * interrupt-clear configuration. Treat this as a servicing operation, not a passive peek.
      */
-    fun readStatus(): Status {
-        val raw = readRegister(Register.STATUS)
-        return Status(
-            raw = raw,
-            ecgFifoInterrupt = raw.hasBit(23),
-            ecgFifoOverflow = raw.hasBit(22),
-            fastRecoveryInterrupt = raw.hasBit(21),
-            dcLeadOffInterrupt = raw.hasBit(20),
-            leadsOnInterrupt = raw.hasBit(11),
-            rtorInterrupt = raw.hasBit(10),
-            sampleInterrupt = raw.hasBit(9),
-            pllUnlocked = raw.hasBit(8),
-            leadOffPositiveHigh = raw.hasBit(3),
-            leadOffPositiveLow = raw.hasBit(2),
-            leadOffNegativeHigh = raw.hasBit(1),
-            leadOffNegativeLow = raw.hasBit(0),
-        )
-    }
+//    fun readStatus(): Status {
+//        val raw = readRegister(Register.STATUS)
+//        return Status(
+//            raw = raw,
+//            ecgFifoInterrupt = raw.hasBit(23),
+//            ecgFifoOverflow = raw.hasBit(22),
+//            fastRecoveryInterrupt = raw.hasBit(21),
+//            dcLeadOffInterrupt = raw.hasBit(20),
+//            leadsOnInterrupt = raw.hasBit(11),
+//            rtorInterrupt = raw.hasBit(10),
+//            sampleInterrupt = raw.hasBit(9),
+//            pllUnlocked = raw.hasBit(8),
+//            leadOffPositiveHigh = raw.hasBit(3),
+//            leadOffPositiveLow = raw.hasBit(2),
+//            leadOffNegativeHigh = raw.hasBit(1),
+//            leadOffNegativeLow = raw.hasBit(0),
+//        )
+//    }
 
     fun waitForPllLock(
         timeoutMs: Long = 250L,
@@ -450,7 +408,7 @@ class Max30003Driver(
 
         var elapsed = 0L
         while (true) {
-            if (!readStatus().pllUnlocked) return
+//            if (!readStatus().pllUnlocked) return
             if (elapsed >= timeoutMs) {
                 error("MAX30003 PLL did not lock within ${timeoutMs}ms")
             }
@@ -547,18 +505,6 @@ class Max30003Driver(
     private fun extractMax30003Word(rawFrame: UInt): Int =
         (rawFrame and 0x00FF_FFFFu).toInt()
 
-    fun readRtor(masterClock: MasterClock): RtorMeasurement {
-        val raw = readRegister(Register.RTOR)
-        val count = (raw ushr 10) and 0x3FFF
-        val intervalMs = count * masterClock.rtorResolutionMillis
-        val bpm = if (intervalMs > 0.0) 60_000.0 / intervalMs else null
-        return RtorMeasurement(
-            rawCount = count,
-            intervalMillis = intervalMs,
-            beatsPerMinute = bpm,
-        )
-    }
-
     fun parseEcgWord(rawWord: Int): EcgSample {
         require(rawWord in 0..MASK_24) { "FIFO word must fit in 24 bits" }
 
@@ -645,9 +591,6 @@ class Max30003Driver(
         }
         return rx
     }
-
-    private fun bytesTo24(msb: UByte, mid: UByte, lsb: UByte): Int =
-        (msb.toInt() shl 16) or (mid.toInt() shl 8) or lsb.toInt()
 
     private fun bytesTo32(b0: UByte, b1: UByte, b2: UByte, b3: UByte): UInt =
         (b0.toUInt() shl 24) or
