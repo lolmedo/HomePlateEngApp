@@ -42,7 +42,7 @@ class SC18IS606Driver(
          * busy. These retry values are software policy, not datasheet timing limits.
          * Tune them after measuring the NFC -> I2C path on the target hardware.
          */
-        private const val BUSY_RETRY_COUNT = 25
+        private const val BUSY_RETRY_COUNT = 1
         private const val BUSY_RETRY_DELAY_MS = 1L
     }
 
