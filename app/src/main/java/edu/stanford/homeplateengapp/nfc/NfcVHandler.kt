@@ -57,6 +57,7 @@ class NfcVHandler(private val tag: Tag) {
                 numberWriteBytes.toUByte(),
             ) + i2cData + ubyteArrayOf(numberReadBytes.toUByte())
 //            Log.d("NfcV_i2cTransceive", "TX: ${nfcData.toHexString()}")
+            // Implement a NACK exception; the last byte corresponds to NACK positions
 
             // Transceive NFC data.
             val response = transceive(nfcData)
