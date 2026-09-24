@@ -313,7 +313,7 @@ class SC18IS606Driver(
         return retryWhileBusy {
             val response = transport.i2cTransceive(frame, length)
 
-            require(response.size >= length) {
+            require(response.size == length) {
                 "Expected $length bytes from SC18IS606, received ${response.size}"
             }
 

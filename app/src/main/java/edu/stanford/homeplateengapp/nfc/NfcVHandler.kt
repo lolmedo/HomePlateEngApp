@@ -57,7 +57,7 @@ class NfcVHandler(private val tag: Tag) {
                 numberWriteBytes.toUByte(),
             ) + i2cData + ubyteArrayOf(numberReadBytes.toUByte())
 //            Log.d("NfcV_i2cTransceive", "TX: ${nfcData.toHexString()}")
-            // Implement a NACK exception; the last byte corresponds to NACK positions
+
 
             // Transceive NFC data.
             val response = transceive(nfcData)
@@ -66,8 +66,12 @@ class NfcVHandler(private val tag: Tag) {
                 Log.e("NfcV_i2cTransceive", "RX: Operation failed.")
                 return UByteArray(1)
             }
+            // Implement a NACK exception; the last byte corresponds to NACK positions
 //            Log.d("NfcV_i2cTransceive", "RX: ${response.toHexString()}")
-            return response.drop(1).toUByteArray()   // Drop byte indicating successful response
+            return response
+                .drop(1)
+                .dropLast(1)
+                .toUByteArray()   // Drop byte indicating successful response
         } catch (e: IOException) {
             e.printStackTrace()
             Log.e("NfcV_i2cTransceive", "Operation error.")
