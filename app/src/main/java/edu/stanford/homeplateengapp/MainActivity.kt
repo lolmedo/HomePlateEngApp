@@ -150,8 +150,15 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         val info = ecgSensor.readInfo()
 
         println("Raw INFO: 0x${info.raw.toString(16)}")
-        println("Revision ID: ${info.revisionId}")
+//        println("Revision ID: ${info.revisionId}")
         println("Interface valid: ${info.interfacePatternValid}")
+
+        var status = ecgSensor.readStatus()
+        println("Has Power cycled? ${status.powerReady}")
+        status = ecgSensor.readStatus()
+        println("Has Power cycled? ${status.powerReady}")
+
+
 //        val register = 0x01FFu
 //        val txData = ubyteArrayOf(
 //            ((register.toUInt() shr 8) and 0xFFu).toUByte(),
@@ -166,7 +173,7 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 //        )
 
         // Initialize temperature sensor
-        tempSensor.initialize()
+//        tempSensor.initialize()
     }
 }
 

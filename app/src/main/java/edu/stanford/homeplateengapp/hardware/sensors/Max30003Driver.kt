@@ -2,6 +2,9 @@
 
 package edu.stanford.homeplateengapp.hardware.sensors
 
+import edu.stanford.homeplateengapp.hardware.Max20362
+import kotlin.UByte
+
 /**
  * MAX30003 ECG AFE driver.
  *
@@ -45,8 +48,7 @@ class Max30003Driver(
     )
 
     enum class Register(val address: UShort) {
-        NO_OP(0x00u),
-        STATUS(0x01u),
+        STATUS_1(0x0000u),
         EN_INT(0x02u),
         EN_INT2(0x03u),
         MNGR_INT(0x04u),
@@ -58,13 +60,26 @@ class Max30003Driver(
         CNFG_GEN(0x10u),
         CNFG_CAL(0x12u),
         CNFG_EMUX(0x14u),
-        CNFG_ECG(0x15u),
+        CNFG_ECG1(0x20u),
+        CNFG_ECG2(0x21u),
+        CNFG_ECG3(0x22u),
+        CNFG_ECG4(0x23u),
+        CNFG_ECG5(0x25u),
         CNFG_RTOR1(0x1Du),
         CNFG_RTOR2(0x1Eu),
         ECG_FIFO_BURST(0x20u),
         ECG_FIFO(0x21u),
         RTOR(0x25u),
         NO_OP_ALT(0x7Fu),
+    }
+
+    enum class InputMux(val bitmask: UByte) {
+        OPEN(0x0u),
+        EL1(0x1u),
+        EL2(0x2u),
+        EL3(0x3u),
+        EL4(0x4u),
+        EL5(0x5u),
     }
 
     enum class MasterClock(
@@ -159,15 +174,15 @@ class Max30003Driver(
     }
 
     data class Status(
-        val raw: Int,
-        val ecgFifoInterrupt: Boolean,
-        val ecgFifoOverflow: Boolean,
-        val fastRecoveryInterrupt: Boolean,
-        val dcLeadOffInterrupt: Boolean,
+        val raw1: UByte,
+        val fifoReady: Boolean,
+        val powerReady: Boolean,
+        val frequencyUnlocked: Boolean,
+        val frequencyLocked: Boolean,
+        val phaseUnlocked: Boolean,
+        val phaseLocked: Boolean,
+        val ecgFastRecoveryInterrupt: Boolean,
         val leadsOnInterrupt: Boolean,
-        val rtorInterrupt: Boolean,
-        val sampleInterrupt: Boolean,
-        val pllUnlocked: Boolean,
         val leadOffPositiveHigh: Boolean,
         val leadOffPositiveLow: Boolean,
         val leadOffNegativeHigh: Boolean,
@@ -200,87 +215,90 @@ class Max30003Driver(
     )
 
     data class EcgConfig(
-        val masterClock: MasterClock = MasterClock.FCLK_32768_HZ,
-        val rate: EcgRate = EcgRate.RATE_2,
-        val gain: EcgGain = EcgGain.X20,
-        val highPass: DigitalHighPass = DigitalHighPass.HZ_0_5,
-        val lowPass: DigitalLowPass = DigitalLowPass.APPROX_40_HZ,
-        val invertInputs: Boolean = false,
-        val enableRtor: Boolean = false,
-        val enableLeadBias: Boolean = false,
-        val leadBiasResistance: LeadBiasResistance = LeadBiasResistance.M100,
-        val biasPositiveInput: Boolean = true,
-        val biasNegativeInput: Boolean = true,
-        val enableDcLeadOff: Boolean = false,
-        val leadOffCurrent: LeadOffCurrent = LeadOffCurrent.OFF,
-        val leadOffThreshold: LeadOffThreshold = LeadOffThreshold.MV_300,
-        val leadOffReversePolarity: Boolean = false,
-        /** Number of unread FIFO records that causes EINT, 1..32. */
-        val fifoInterruptThreshold: Int = 8,
-        val enableFifoInterrupt: Boolean = true,
-        val enableFifoOverflowInterrupt: Boolean = true,
-        val enableRtorInterrupt: Boolean = false,
-        val interruptOutputType: InterruptOutputType = InterruptOutputType.OPEN_DRAIN_WITH_125K_PULLUP,
-    ) {
-        init {
-            require(fifoInterruptThreshold in 1..32) {
-                "fifoInterruptThreshold must be in 1..32"
-            }
-            require(!enableRtorInterrupt || enableRtor) {
-                "enableRtorInterrupt requires enableRtor=true"
-            }
-        }
-
-        /**
-         * Human-readable ECG sample rate implied by masterClock + rate.
-         * Throws for combinations the datasheet marks reserved.
-         */
-        fun sampleRateSps(): Double = when (masterClock) {
-            MasterClock.FCLK_32768_HZ -> when (rate) {
-                EcgRate.RATE_0 -> 512.0
-                EcgRate.RATE_1 -> 256.0
-                EcgRate.RATE_2 -> 128.0
-            }
-            MasterClock.FCLK_32000_HZ_500_FAMILY -> when (rate) {
-                EcgRate.RATE_0 -> 500.0
-                EcgRate.RATE_1 -> 250.0
-                EcgRate.RATE_2 -> 125.0
-            }
-            MasterClock.FCLK_32000_HZ_200_FAMILY -> {
-                require(rate == EcgRate.RATE_2) { "FMSTR=10 only supports RATE=10 (200 sps)" }
-                200.0
-            }
-            MasterClock.FCLK_31968_78_HZ -> {
-                require(rate == EcgRate.RATE_2) { "FMSTR=11 only supports RATE=10 (~199.8 sps)" }
-                199.8049
-            }
-        }
-
-        fun validate() {
-            val sps = sampleRateSps()
-            when (lowPass) {
-                DigitalLowPass.BYPASS,
-                DigitalLowPass.APPROX_40_HZ -> Unit
-
-                DigitalLowPass.APPROX_100_HZ -> require(
-                    sps == 512.0 || sps == 500.0 || sps == 256.0 || sps == 250.0
-                ) { "~100 Hz DLPF is unsupported at $sps sps" }
-
-                DigitalLowPass.APPROX_150_HZ -> require(
-                    sps == 512.0 || sps == 500.0
-                ) { "~150 Hz DLPF is unsupported at $sps sps" }
-            }
-        }
-    }
+//        val masterClock: MasterClock = MasterClock.FCLK_32768_HZ,
+        val ecgpAssign: InputMux = InputMux.EL1,
+        val ecgnAssign: InputMux = InputMux.EL3,
+//        val rate: EcgRate = EcgRate.RATE_2,
+//        val gain: EcgGain = EcgGain.X20,
+//        val highPass: DigitalHighPass = DigitalHighPass.HZ_0_5,
+//        val lowPass: DigitalLowPass = DigitalLowPass.APPROX_40_HZ,
+//        val invertInputs: Boolean = false,
+//        val enableRtor: Boolean = false,
+//        val enableLeadBias: Boolean = false,
+//        val leadBiasResistance: LeadBiasResistance = LeadBiasResistance.M100,
+//        val biasPositiveInput: Boolean = true,
+//        val biasNegativeInput: Boolean = true,
+//        val enableDcLeadOff: Boolean = false,
+//        val leadOffCurrent: LeadOffCurrent = LeadOffCurrent.OFF,
+//        val leadOffThreshold: LeadOffThreshold = LeadOffThreshold.MV_300,
+//        val leadOffReversePolarity: Boolean = false,
+//        /** Number of unread FIFO records that causes EINT, 1..32. */
+//        val fifoInterruptThreshold: Int = 8,
+//        val enableFifoInterrupt: Boolean = true,
+//        val enableFifoOverflowInterrupt: Boolean = true,
+//        val enableRtorInterrupt: Boolean = false,
+//        val interruptOutputType: InterruptOutputType = InterruptOutputType.OPEN_DRAIN_WITH_125K_PULLUP,
+    )
+//    ) {
+//        init {
+//            require(fifoInterruptThreshold in 1..32) {
+//                "fifoInterruptThreshold must be in 1..32"
+//            }
+//            require(!enableRtorInterrupt || enableRtor) {
+//                "enableRtorInterrupt requires enableRtor=true"
+//            }
+//        }
+//
+//        /**
+//         * Human-readable ECG sample rate implied by masterClock + rate.
+//         * Throws for combinations the datasheet marks reserved.
+//         */
+//        fun sampleRateSps(): Double = when (masterClock) {
+//            MasterClock.FCLK_32768_HZ -> when (rate) {
+//                EcgRate.RATE_0 -> 512.0
+//                EcgRate.RATE_1 -> 256.0
+//                EcgRate.RATE_2 -> 128.0
+//            }
+//            MasterClock.FCLK_32000_HZ_500_FAMILY -> when (rate) {
+//                EcgRate.RATE_0 -> 500.0
+//                EcgRate.RATE_1 -> 250.0
+//                EcgRate.RATE_2 -> 125.0
+//            }
+//            MasterClock.FCLK_32000_HZ_200_FAMILY -> {
+//                require(rate == EcgRate.RATE_2) { "FMSTR=10 only supports RATE=10 (200 sps)" }
+//                200.0
+//            }
+//            MasterClock.FCLK_31968_78_HZ -> {
+//                require(rate == EcgRate.RATE_2) { "FMSTR=11 only supports RATE=10 (~199.8 sps)" }
+//                199.8049
+//            }
+//        }
+//
+//        fun validate() {
+//            val sps = sampleRateSps()
+//            when (lowPass) {
+//                DigitalLowPass.BYPASS,
+//                DigitalLowPass.APPROX_40_HZ -> Unit
+//
+//                DigitalLowPass.APPROX_100_HZ -> require(
+//                    sps == 512.0 || sps == 500.0 || sps == 256.0 || sps == 250.0
+//                ) { "~100 Hz DLPF is unsupported at $sps sps" }
+//
+//                DigitalLowPass.APPROX_150_HZ -> require(
+//                    sps == 512.0 || sps == 500.0
+//                ) { "~150 Hz DLPF is unsupported at $sps sps" }
+//            }
+//        }
+//    }
 
     /**
      * Configure normal ECG acquisition without crossing transport layers.
      *
      * Sequence:
      *  1. Software reset.
-     *  2. One NO-OP because INFO is not valid as the first command after reset.
-     *  3. Configure FIFO/interrupt behavior, ECG front-end, RTOR and input mux.
-     *  4. Enable ECG in CNFG_GEN.
+     *  2. Check device info to validate SPI transport layer.
+     *  3. Configure ECG front-end, and input mux. Optionally, FIFO(FIFO_A_FULL)/interrupt behavior,
+     *  4. Enable ECG in CNFG_GEN (Different register?).
      *  5. Caller may wait for PLL lock, then issue SYNCH to establish time zero.
      *
      * By default this method waits for PLL lock and synchronizes. Set waitForPll=false
@@ -293,12 +311,13 @@ class Max30003Driver(
         pollDelayMs: Long = 5L,
         delay: (Long) -> Unit = { Thread.sleep(it) },
     ): DeviceInfo {
-        config.validate()
+//        config.validate()
 
         softwareReset()
-        readRegister(Register.NO_OP)
+//        readRegister(Register.NO_OP)
         val info = readInfo()
 
+        buildEcgConfig(config)
 //        writeRegister(Register.MNGR_INT, buildManagerInterrupt(config))
 //        writeRegister(Register.EN_INT, buildInterruptEnable(config))
 //        writeRegister(Register.EN_INT2, 0x000000) // Dedicated INT2B path disabled unless the upper layer configures it.
@@ -306,15 +325,16 @@ class Max30003Driver(
 //        writeRegister(Register.CNFG_RTOR1, buildRtor1Config(config))
 //        writeRegister(Register.CNFG_RTOR2, DEFAULT_RTOR2)
 //        writeRegister(Register.CNFG_EMUX, buildEmuxConfig(config))
+
 //        writeRegister(Register.CNFG_GEN, buildGeneralConfig(config))
 
-        if (waitForPll) {
-            waitForPllLock(
-                timeoutMs = pllTimeoutMs,
-                pollDelayMs = pollDelayMs,
-                delay = delay,
-            )
-        }
+//        if (waitForPll) {
+//            waitForPllLock(
+//                timeoutMs = pllTimeoutMs,
+//                pollDelayMs = pollDelayMs,
+//                delay = delay,
+//            )
+//        }
 
         synchronize()
         return info
@@ -379,24 +399,24 @@ class Max30003Driver(
      * Reading STATUS can clear latched status/interrupt terms according to the MAX30003
      * interrupt-clear configuration. Treat this as a servicing operation, not a passive peek.
      */
-//    fun readStatus(): Status {
-//        val raw = readRegister(Register.STATUS)
-//        return Status(
-//            raw = raw,
-//            ecgFifoInterrupt = raw.hasBit(23),
-//            ecgFifoOverflow = raw.hasBit(22),
-//            fastRecoveryInterrupt = raw.hasBit(21),
-//            dcLeadOffInterrupt = raw.hasBit(20),
-//            leadsOnInterrupt = raw.hasBit(11),
-//            rtorInterrupt = raw.hasBit(10),
-//            sampleInterrupt = raw.hasBit(9),
-//            pllUnlocked = raw.hasBit(8),
-//            leadOffPositiveHigh = raw.hasBit(3),
-//            leadOffPositiveLow = raw.hasBit(2),
-//            leadOffNegativeHigh = raw.hasBit(1),
-//            leadOffNegativeLow = raw.hasBit(0),
-//        )
-//    }
+    fun readStatus(): Status {
+        val raw1 = readRegister(Register.STATUS_1)
+        return Status(
+            raw1 = raw1,
+            powerReady = raw1.isBitSet(0),
+            fifoReady = raw1.isBitSet(7),
+            frequencyUnlocked = raw1.isBitSet(4),
+            frequencyLocked = raw1.isBitSet(3),
+            phaseUnlocked = raw1.isBitSet(2),
+            phaseLocked = raw1.isBitSet(1),
+            ecgFastRecoveryInterrupt = false,   //TODO
+            leadsOnInterrupt = false,           //TODO
+            leadOffPositiveHigh = false,        //TODO
+            leadOffPositiveLow= false,          //TODO
+            leadOffNegativeHigh = false,        //TODO
+            leadOffNegativeLow = false,         //TODO
+        )
+    }
 
     fun waitForPllLock(
         timeoutMs: Long = 250L,
@@ -525,64 +545,60 @@ class Max30003Driver(
         )
     }
 
-    private fun buildGeneralConfig(config: EcgConfig): Int {
-        var value = 0
-        value = value or (config.masterClock.bits shl 20)
-        value = value or (1 shl 19) // EN_ECG
+//    private fun buildGeneralConfig(config: EcgConfig): Int {
+//        var value = 0
+//        value = value or (config.masterClock.bits shl 20)
+//        value = value or (1 shl 19) // EN_ECG
+//
+//        if (config.enableDcLeadOff) {
+//            value = value or (0b01 shl 12)
+//            if (config.leadOffReversePolarity) value = value or (1 shl 11)
+//            value = value or (config.leadOffCurrent.bits shl 8)
+//            value = value or (config.leadOffThreshold.bits shl 6)
+//        }
+//
+//        if (config.enableLeadBias) {
+//            value = value or (0b01 shl 4)
+//            value = value or (config.leadBiasResistance.bits shl 2)
+//            if (config.biasPositiveInput) value = value or (1 shl 1)
+//            if (config.biasNegativeInput) value = value or 1
+//        }
+//
+//        return value
+//    }
 
-        if (config.enableDcLeadOff) {
-            value = value or (0b01 shl 12)
-            if (config.leadOffReversePolarity) value = value or (1 shl 11)
-            value = value or (config.leadOffCurrent.bits shl 8)
-            value = value or (config.leadOffThreshold.bits shl 6)
-        }
-
-        if (config.enableLeadBias) {
-            value = value or (0b01 shl 4)
-            value = value or (config.leadBiasResistance.bits shl 2)
-            if (config.biasPositiveInput) value = value or (1 shl 1)
-            if (config.biasNegativeInput) value = value or 1
-        }
-
-        return value
+    private fun buildEcgConfig(config: EcgConfig): Boolean {
+        val bitmaskEcgn = config.ecgnAssign.bitmask.toInt() and 0x07
+        val bitmaskEcgp = (config.ecgpAssign.bitmask.toInt() and 0x07) shl 3
+        val bitmaskConfig3 = (bitmaskEcgp or bitmaskEcgn).toUByte()
+        writeRegister(Register.CNFG_ECG3, bitmaskConfig3)
+        // Add the possibility to check the current configuration to ensure
+        // all values are the desired ones
+        return true
     }
 
-    private fun buildEcgConfig(config: EcgConfig): Int {
-        return (config.rate.bits shl 22) or
-                (config.gain.bits shl 16) or
-                (config.highPass.bit shl 14) or
-                (config.lowPass.bits shl 12)
-    }
+//    private fun buildEmuxConfig(config: EcgConfig): Int {
+//        var value = 0
+//        if (config.invertInputs) value = value or (1 shl 23)
+//        // OPENP=0 and OPENN=0 connect both electrodes to the ECG AFE.
+//        // No calibration source is selected.
+//        return value
+//    }
 
-    private fun buildEmuxConfig(config: EcgConfig): Int {
-        var value = 0
-        if (config.invertInputs) value = value or (1 shl 23)
-        // OPENP=0 and OPENN=0 connect both electrodes to the ECG AFE.
-        // No calibration source is selected.
-        return value
-    }
+//    private fun buildManagerInterrupt(config: EcgConfig): Int {
+//        val efit = config.fifoInterruptThreshold - 1
+//        return (efit shl 19) or
+//                (RtorInterruptClear.ON_RTOR_READ.bits shl 4) or
+//                (1 shl 2) // CLR_SAMP = self-clear
+//    }
 
-    private fun buildRtor1Config(config: EcgConfig): Int {
-        // Datasheet defaults: WNDW=3, RGAIN=15(auto), PAVG=2, PTSF=3.
-        var value = (0x3 shl 20) or (0xF shl 16) or (0x2 shl 12) or (0x3 shl 8)
-        if (config.enableRtor) value = value or (1 shl 15)
-        return value
-    }
-
-    private fun buildManagerInterrupt(config: EcgConfig): Int {
-        val efit = config.fifoInterruptThreshold - 1
-        return (efit shl 19) or
-                (RtorInterruptClear.ON_RTOR_READ.bits shl 4) or
-                (1 shl 2) // CLR_SAMP = self-clear
-    }
-
-    private fun buildInterruptEnable(config: EcgConfig): Int {
-        var value = config.interruptOutputType.bits
-        if (config.enableFifoInterrupt) value = value or (1 shl 23)
-        if (config.enableFifoOverflowInterrupt) value = value or (1 shl 22)
-        if (config.enableRtorInterrupt) value = value or (1 shl 10)
-        return value
-    }
+//    private fun buildInterruptEnable(config: EcgConfig): Int {
+//        var value = config.interruptOutputType.bits
+//        if (config.enableFifoInterrupt) value = value or (1 shl 23)
+//        if (config.enableFifoOverflowInterrupt) value = value or (1 shl 22)
+//        if (config.enableRtorInterrupt) value = value or (1 shl 10)
+//        return value
+//    }
 
     private fun transferChecked(tx: UByteArray): UByteArray {
         val rx = spi.transfer(chipSelect, tx)
@@ -598,7 +614,10 @@ class Max30003Driver(
                 (b2.toUInt() shl 8) or
                 b3.toUInt()
 
-    private fun Int.hasBit(bit: Int): Boolean = (this and (1 shl bit)) != 0
+    fun UByte.isBitSet(bit: Int): Boolean {
+        require(bit in 0..7)
+        return (this.toInt() and (1 shl bit)) != 0
+    }
 
     companion object {
         private const val MASK_24 = 0x00FF_FFFF
