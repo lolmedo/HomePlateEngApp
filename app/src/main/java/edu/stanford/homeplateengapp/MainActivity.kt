@@ -22,8 +22,10 @@ import edu.stanford.homeplateengapp.nfc.NfcVHandler
 import edu.stanford.homeplateengapp.hardware.Max20362
 import edu.stanford.homeplateengapp.hardware.sensors.Max30210
 import edu.stanford.homeplateengapp.hardware.sensors.Max30003Driver
+import edu.stanford.homeplateengapp.hardware.sensors.Max30003Driver.Register
 import edu.stanford.homeplateengapp.hardware.spi.SC18IS606Driver
 import edu.stanford.homeplateengapp.ui.theme.HomePlateEngAppTheme
+import kotlin.concurrent.thread
 
 class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
@@ -155,9 +157,86 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
         var status = ecgSensor.readStatus()
         println("Has Power cycled? ${status.powerReady}")
+        println("Has pll freq locked? ${status.frequencyLocked} and pll phase? ${status.phaseLocked}")
         status = ecgSensor.readStatus()
         println("Has Power cycled? ${status.powerReady}")
 
+        var byteLSB: UByte
+        var byteMSB: UByte
+        var count: Int
+
+        // Shutdown, Reset timing subsystem
+        ecgSensor.writeRegister(Register.SYSTEM_RESET, 0x02u)
+        Thread.sleep(10)
+        ecgSensor.writeRegister(Register.SYSTEM_RESET, 0x00u)
+        ecgSensor.writeRegister(Register.SYSTEM_SYNC1, 0x80u)
+        // Set up electrode multiplexer stage
+        ecgSensor.buildEcgConfig(Max30003Driver.EcgConfig())
+        // Configure clock
+        // // Set OSR
+        var bytePacket = (0x3 shl 1).toUByte()
+        ecgSensor.writeRegister(Register.CNFG_ECG1, bytePacket)
+        // // Set FDIV and NDIV
+        val ecgNDiv = 0x40
+        val ecgFDiv = 0x2
+        bytePacket = ((((ecgNDiv shr 8) and 0x7) shl 5) or ecgFDiv).toUByte()
+        ecgSensor.writeRegister(Register.CNFG_PLL4, bytePacket)
+        bytePacket = (ecgNDiv and 0xFF).toUByte()
+        ecgSensor.writeRegister(Register.CNFG_PLL5, bytePacket)
+        // // Set MDIV
+        val mDiv = 0x7F // 127.0
+        bytePacket = (mDiv and 0xFF).toUByte()
+        ecgSensor.writeRegister(Register.CNFG_PLL2, bytePacket)
+        bytePacket = ecgSensor.readRegister(Register.CNFG_PLL1)
+        bytePacket = bytePacket or (((mDiv shr 8) and 0x3) shl 6).toUByte()
+        ecgSensor.writeRegister(Register.CNFG_PLL1, bytePacket)
+        // Enable PLL
+        val pllEnable = 0x1
+        bytePacket = ecgSensor.readRegister(Register.CNFG_PLL1)
+        bytePacket = bytePacket or pllEnable.toUByte()
+        ecgSensor.writeRegister(Register.CNFG_PLL1, bytePacket)
+        // Wait for PLL locks
+        status = ecgSensor.readStatus()
+        println("Has pll freq locked? ${status.frequencyLocked} and pll phase? ${status.phaseLocked}")
+//        Thread.sleep(50)
+//        status = ecgSensor.readStatus()
+//        println("Has pll freq locked? ${status.frequencyLocked} and pll phase? ${status.phaseLocked}")
+        // Read from FIFO counter; how many samples are in FIFO
+        byteLSB = ecgSensor.readRegister(Register.FIFO_COUNTER2)
+        byteMSB = ecgSensor.readRegister(Register.FIFO_COUNTER1)
+        var byteWriteLSB = ecgSensor.readRegister(Register.FIFO_WRITE_POINTER)
+        count =
+            ((byteMSB.toInt() shr 6) shl 8) or
+                    byteLSB.toInt()
+        println("FIFO counter value: $count")
+        println("Write pointer value: ${byteWriteLSB.toInt()}")
+        // Enable ECG; Turn on the ignition
+        val ecgEnable = 0x1
+        bytePacket = ecgSensor.readRegister(Register.CNFG_ECG1)
+        bytePacket = bytePacket or ecgEnable.toUByte()
+        ecgSensor.writeRegister(Register.CNFG_ECG1, bytePacket)
+        bytePacket = ecgSensor.readRegister(Register.CNFG_ECG1)
+        println("CNFG_1 byte: 0x${bytePacket.toString(16)}")
+        // Read from until full
+        var loopCount = 0
+        while (count <= 512) {
+            // Read from FIFO counter; how many samples are in FIFO
+            byteLSB = ecgSensor.readRegister(Register.FIFO_COUNTER2)
+            byteMSB = ecgSensor.readRegister(Register.FIFO_COUNTER1)
+            count =
+                ((byteMSB.toInt() shr 6) shl 8) or
+                        byteLSB.toInt()
+
+            println("FIFO counter value: $count")
+
+            byteWriteLSB = ecgSensor.readRegister(Register.FIFO_WRITE_POINTER)
+            println("Write pointer value: ${byteWriteLSB.toInt()}")
+
+            loopCount += 1
+            if (loopCount > 5) {break}
+
+            Thread.sleep(100)
+        }
 
 //        val register = 0x01FFu
 //        val txData = ubyteArrayOf(

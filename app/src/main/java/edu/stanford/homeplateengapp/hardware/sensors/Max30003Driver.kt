@@ -60,6 +60,17 @@ class Max30003Driver(
         CNFG_GEN(0x10u),
         CNFG_CAL(0x12u),
         CNFG_EMUX(0x14u),
+        FIFO_WRITE_POINTER(0x08u),
+        FIFO_COUNTER1(0x09u),
+        FIFO_COUNTER2(0x0Au),
+        SYSTEM_SYNC1(0x10u),
+        SYSTEM_RESET(0x11u),
+        CNFG_PLL1(0x15u),
+        CNFG_PLL2(0x16u),
+        CNFG_PLL3(0x17u),
+        CNFG_PLL4(0x18u),
+        CNFG_PLL5(0x19u),
+        CNFG_PLL6(0x1Au),
         CNFG_ECG1(0x20u),
         CNFG_ECG2(0x21u),
         CNFG_ECG3(0x22u),
@@ -567,7 +578,7 @@ class Max30003Driver(
 //        return value
 //    }
 
-    private fun buildEcgConfig(config: EcgConfig): Boolean {
+    fun buildEcgConfig(config: EcgConfig): Boolean {
         val bitmaskEcgn = config.ecgnAssign.bitmask.toInt() and 0x07
         val bitmaskEcgp = (config.ecgpAssign.bitmask.toInt() and 0x07) shl 3
         val bitmaskConfig3 = (bitmaskEcgp or bitmaskEcgn).toUByte()
