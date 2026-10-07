@@ -14,7 +14,7 @@ class Max30210(private val transport: NfcVHandler) {
         val message = ubyteArrayOf(
             I2C_ADDRESS or WRITE_BIT,
             REG_PART_IDENTIFIER,
-            I2C_ADDRESS or READ_BIT,
+            0xA0u.toUByte() or READ_BIT,
         )
         transport.i2cTransceive(message, 1)
     }
