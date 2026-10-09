@@ -636,4 +636,21 @@ class Max30003Driver(
         private val READ_COMMAND: UByte = 0x80u
         private val WRITE_COMMAND: UByte = 0x00u
     }
+
+    fun ecgCountsToMillivolts(raw32: Int): Double {
+        // Extract ECG data: bits [18:0] from 32 bit FIFO
+        val sample19 = (raw32) and 0x7FFFF
+
+
+        // Convert 19-bit two's complement to a signed Int.
+        val adcCount = if ((sample19 and 0x40000) != 0) {
+            sample19 - 0x80000
+        } else {
+            sample19
+        }
+
+
+        // Convert ADC counts to differential input voltage in mV.
+        return adcCount * (1000.0 / (262144.0 * 160.0))
+    }
 }
