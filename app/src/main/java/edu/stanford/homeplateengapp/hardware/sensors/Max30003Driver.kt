@@ -2,7 +2,6 @@
 
 package edu.stanford.homeplateengapp.hardware.sensors
 
-import edu.stanford.homeplateengapp.hardware.Max20362
 import kotlin.UByte
 
 /**
@@ -63,6 +62,7 @@ class Max30003Driver(
         FIFO_WRITE_POINTER(0x08u),
         FIFO_COUNTER1(0x09u),
         FIFO_COUNTER2(0x0Au),
+        FIFO_DATA(0x00Fu),
         SYSTEM_SYNC1(0x10u),
         SYSTEM_RESET(0x11u),
         CNFG_PLL1(0x15u),
@@ -76,9 +76,6 @@ class Max30003Driver(
         CNFG_ECG3(0x22u),
         CNFG_ECG4(0x23u),
         CNFG_ECG5(0x25u),
-        CNFG_RTOR1(0x1Du),
-        CNFG_RTOR2(0x1Eu),
-        ECG_FIFO_BURST(0x20u),
         ECG_FIFO(0x21u),
         RTOR(0x25u),
         NO_OP_ALT(0x7Fu),
@@ -163,25 +160,13 @@ class Max30003Driver(
         SELF_CLEAR(0b10),
     }
 
-    enum class EcgTag(val bits: Int) {
-        VALID(0b000),
-        FAST_MODE(0b001),
-        VALID_EOF(0b010),
-        FAST_MODE_EOF(0b011),
-        UNUSED_100(0b100),
-        UNUSED_101(0b101),
-        EMPTY(0b110),
-        OVERFLOW(0b111),
-        ;
+    enum class Tag(val bits: Int) {
+        ECG_DATA    (0b1000000),
+        BIOZ_I_DATA (0b1000001),
+        INVALID     (0b1111111),
 
-        val hasValidVoltage: Boolean
-            get() = this == VALID || this == VALID_EOF
-
-        val advancesTime: Boolean
-            get() = this == VALID || this == FAST_MODE || this == VALID_EOF || this == FAST_MODE_EOF
-
-        val isEndOfFile: Boolean
-            get() = this == VALID_EOF || this == FAST_MODE_EOF
+//        val isValidECGData: Boolean
+//            get() = this == ECG_DATA
     }
 
     data class Status(
@@ -206,18 +191,17 @@ class Max30003Driver(
     )
 
     data class EcgSample(
-        /** Full 24-bit FIFO word. */
+        /** Full 32-bit FIFO word. */
         val rawWord: Int,
-        /** Signed 18-bit ECG ADC code after sign extension. */
-        val code: Int,
-        val tag: EcgTag,
-        /** PTAG is exposed raw because this datasheet section does not define its semantics. */
-        val pTag: Int,
-    ) {
-        val hasValidVoltage: Boolean get() = tag.hasValidVoltage
-        val advancesTime: Boolean get() = tag.advancesTime
-        val isEndOfFile: Boolean get() = tag.isEndOfFile
-    }
+        val tag: Tag?,
+        val isFastRecovery: Boolean,
+        /** Signed 19-bit ECG ADC code after sign extension. */
+        val adcCode: Int,
+        val voltage: Double,
+    )
+//    ) {
+//        val hasEcgData: Boolean get() = tag.isValidECGData
+//    }
 
     data class RtorMeasurement(
         val rawCount: Int,
@@ -359,15 +343,22 @@ class Max30003Driver(
      *
      * The received register byte is expected in rx[3].
      */
-    fun readByte(address: UShort): UByte {
+    fun readByte(address: UShort): UByte = readBytes(address, 1)[0]
+
+    fun readBytes(address: UShort, byteCount: Int): UByteArray {
+        require(byteCount > 0) {"byteCount must be positive"}
+
         val a = address.toUInt()
+
         val tx = ubyteArrayOf(
             ((a shr 8) and 0xFFu).toUByte(),
             (a and 0xFFu).toUByte(),
             READ_COMMAND,
-            0x00u,
-        )
-        return transferChecked(tx)[3]
+        ) + UByteArray(byteCount) {0x00u}
+
+        val rx = transferChecked(tx)
+
+        return rx.copyOfRange(3, 3+ byteCount)
     }
 
     /** Write one physical 8-bit register on the custom device. */
@@ -456,32 +447,32 @@ class Max30003Driver(
      * Change [extractMax30003Word] if your custom 32-bit frame places those bits
      * somewhere else.
      */
-    fun readEcgSample(): EcgSample = readEcgFifoBurst(1).first()
+    fun readEcgSample(): EcgSample = readFifoBurst(1).first()
 
-    /**
-     * Read up to [maxSamples] using one-sample custom burst transactions.
-     * Stops on EOF or EMPTY and resets the FIFO on overflow.
-     */
-    fun drainEcgFifo(maxSamples: Int = 32): List<EcgSample> {
-        require(maxSamples in 1..32) { "maxSamples must be in 1..32" }
-
-        val result = ArrayList<EcgSample>(maxSamples)
-        repeat(maxSamples) {
-            val sample = readEcgSample()
-            when (sample.tag) {
-                EcgTag.OVERFLOW -> {
-                    resetFifo()
-                    error("MAX30003 ECG FIFO overflowed; FIFO was reset")
-                }
-                EcgTag.EMPTY -> return result
-                else -> {
-                    result += sample
-                    if (sample.isEndOfFile) return result
-                }
-            }
-        }
-        return result
-    }
+//    /**
+//     * Read up to [maxSamples] using one-sample custom burst transactions.
+//     * Stops on EOF or EMPTY and resets the FIFO on overflow.
+//     */
+//    fun drainEcgFifo(maxSamples: Int = 32): List<EcgSample> {
+//        require(maxSamples in 1..32) { "maxSamples must be in 1..32" }
+//
+//        val result = ArrayList<EcgSample>(maxSamples)
+//        repeat(maxSamples) {
+//            val sample = readEcgSample()
+//            when (sample.tag) {
+//                EcgTag.OVERFLOW -> {
+//                    resetFifo()
+//                    error("MAX30003 ECG FIFO overflowed; FIFO was reset")
+//                }
+//                EcgTag.EMPTY -> return result
+//                else -> {
+//                    result += sample
+//                    if (sample.isEndOfFile) return result
+//                }
+//            }
+//        }
+//        return result
+//    }
 
     /**
      * Read [wordCount] FIFO samples in one custom burst frame.
@@ -491,71 +482,72 @@ class Max30003Driver(
      *
      * Chip select must remain asserted for the entire frame.
      */
-    fun readEcgFifoBurst(wordCount: Int): List<EcgSample> {
-        require(wordCount in 1..32) { "wordCount must be in 1..32" }
+    fun readFifoBurst(wordCount: Int): List<EcgSample> {
+        require(wordCount in 1..512) { "wordCount must be in 1..512" }
 
-        val burstAddress = Register.ECG_FIFO_BURST.address.toUInt()
-        val headerSize = 3
-        val sampleSize = 4
-        val tx = UByteArray(headerSize + wordCount * sampleSize)
-        tx[0] = ((burstAddress shr 8) and 0xFFu).toUByte()
-        tx[1] = (burstAddress and 0xFFu).toUByte()
-        tx[2] = READ_COMMAND
+        val burstAddress = Register.FIFO_DATA.address
 
-        val rx = transferChecked(tx)
+        // Initiliaze SPI transfer packet
+        val sampleSize = 4      // Every sample has 4 bytes
+        val rx = readBytes(burstAddress, wordCount * sampleSize)
+
         val result = ArrayList<EcgSample>(wordCount)
 
         for (index in 0 until wordCount) {
-            val base = headerSize + index * sampleSize
+            val base = index * sampleSize
             val rawFrame = bytesTo32(
                 rx[base],
                 rx[base + 1],
                 rx[base + 2],
                 rx[base + 3],
             )
-            val sample = parseEcgWord(extractMax30003Word(rawFrame))
+            val sample = parseEcgWord(extractWord(rawFrame))
             when (sample.tag) {
-                EcgTag.OVERFLOW -> {
-                    resetFifo()
-                    error("MAX30003 ECG FIFO overflowed during burst read; FIFO was reset")
+                Tag.INVALID -> {
+//                    resetFifo()
+                    error("Invalid word encountered in FIFO: ${sample.rawWord.toString(16)}")
+                    return result
                 }
-                EcgTag.EMPTY -> return result
+                null -> {
+                    error("Unknown FIFO word: ${sample.rawWord.toString(16)}")
+                    return result
+                }
                 else -> {
                     result += sample
-                    if (sample.isEndOfFile) return result
+//                    if (sample.isEndOfFile) return result
                 }
             }
         }
         return result
     }
 
-    /**
-     * Compatibility assumption for the custom 4-byte sample frame:
-     * stock MAX30003 FIFO bits occupy the lower 24 bits.
-     */
-    private fun extractMax30003Word(rawFrame: UInt): Int =
-        (rawFrame and 0x00FF_FFFFu).toInt()
+    private fun extractWord(rawFrame: UInt): Int =
+        (rawFrame and 0x00FF_FFFFu).toInt()   // ????
 
     fun parseEcgWord(rawWord: Int): EcgSample {
-        require(rawWord in 0..MASK_24) { "FIFO word must fit in 24 bits" }
+        require(rawWord in 0..MASK_32) { "FIFO word must fit in 24 bits" }
 
-        val unsigned18 = (rawWord ushr 6) and 0x3FFFF
-        val signed18 = if ((unsigned18 and 0x20000) != 0) {
-            unsigned18 - 0x40000
+        val fastRecoveryBit = (rawWord ushr 19) and 0x1
+
+        val unsigned19 = rawWord and 0x7FFFF
+        val signed19 = if ((unsigned19 and 0x40000) != 0) {
+            unsigned19 - 0x80000
         } else {
-            unsigned18
+            unsigned19
         }
-        val tagBits = (rawWord ushr 3) and 0x07
-        val pTag = rawWord and 0x07
+
+        val voltage = signed19 * (1000.0 / (262144.0 * 160.0))
+
+        val tagBits = (rawWord ushr 25) and 0x7F
 
         return EcgSample(
             rawWord = rawWord,
-            code = signed18,
-            tag = EcgTag.entries.first { it.bits == tagBits },
-            pTag = pTag,
-        )
+            tag = Tag.entries.firstOrNull() { it.bits == tagBits }, // Finds first entry in Tag that matches tagBits
+            adcCode = signed19,
+            voltage = voltage,
+            isFastRecovery = (fastRecoveryBit == 1)
+            )
     }
-
 //    private fun buildGeneralConfig(config: EcgConfig): Int {
 //        var value = 0
 //        value = value or (config.masterClock.bits shl 20)
@@ -631,26 +623,10 @@ class Max30003Driver(
     }
 
     companion object {
-        private const val MASK_24 = 0x00FF_FFFF
+        private const val MASK_32 = 0xFFFF_FFFF
         private const val DEFAULT_RTOR2 = (0x20 shl 16) or (0x2 shl 12) or (0x4 shl 8)
         private val READ_COMMAND: UByte = 0x80u
         private val WRITE_COMMAND: UByte = 0x00u
     }
 
-    fun ecgCountsToMillivolts(raw32: Int): Double {
-        // Extract ECG data: bits [18:0] from 32 bit FIFO
-        val sample19 = (raw32) and 0x7FFFF
-
-
-        // Convert 19-bit two's complement to a signed Int.
-        val adcCount = if ((sample19 and 0x40000) != 0) {
-            sample19 - 0x80000
-        } else {
-            sample19
-        }
-
-
-        // Convert ADC counts to differential input voltage in mV.
-        return adcCount * (1000.0 / (262144.0 * 160.0))
-    }
 }

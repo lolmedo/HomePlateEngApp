@@ -141,7 +141,7 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         bridge.initialize()
         bridge.configureSpi(
             mode = SC18IS606Driver.SpiMode.MODE0,
-            clock = SC18IS606Driver.SpiClock.KHZ_58,
+            clock = SC18IS606Driver.SpiClock.KHZ_1875,
             bitOrder = SC18IS606Driver.BitOrder.MSB_FIRST
         )
 
@@ -225,24 +225,21 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         println("CNFG_1 byte: 0x${bytePacket.toString(16)}")
         // Read from until full
         var loopCount = 0
-        while (count <= 512) {
+        while (count <= 256) {
             // Read from FIFO counter; how many samples are in FIFO
             byteLSB = ecgSensor.readRegister(Register.FIFO_COUNTER2)
-            byteMSB = ecgSensor.readRegister(Register.FIFO_COUNTER1)
-            count =
-                ((byteMSB.toInt() shr 6) shl 8) or
-                        byteLSB.toInt()
+//            byteMSB = ecgSensor.readRegister(Register.FIFO_COUNTER1)
+//            count =
+//                ((byteMSB.toInt() shr 6) shl 8) or
+//                        byteLSB.toInt()
+            count = byteLSB.toInt()
 
             println("FIFO counter value: $count")
 
-            byteWriteLSB = ecgSensor.readRegister(Register.FIFO_WRITE_POINTER)
-            println("Write pointer value: ${byteWriteLSB.toInt()}")
-
-            loopCount += 1
-            if (loopCount > 5) {break}
-
-            Thread.sleep(100)
+//            ecgSensor.readFifoBurst(count)
+            ecgSensor.readEcgSample()
         }
+
 
         val register = 0x01FFu
         val txData = ubyteArrayOf(
